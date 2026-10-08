@@ -3,6 +3,7 @@ cmake_minimum_required(VERSION 3.16)
 
 # Build options
 option(DOOM_STREAMING "Enable WiFi streaming of display" OFF)
+option(DOOM_WIFI_AP "Use WiFi AP mode instead of station mode" OFF)
 
 # Set WiFi credentials for streaming (change these!)
 set(WIFI_SSID "YourWiFiSSID" CACHE STRING "WiFi SSID for streaming")
@@ -23,4 +24,8 @@ if(DOOM_STREAMING)
     add_compile_definitions(DOOM_STREAMING)
     add_compile_definitions(WIFI_SSID="${WIFI_SSID}")
     add_compile_definitions(WIFI_PASS="${WIFI_PASS}")
+    if(DOOM_WIFI_AP)
+        message(STATUS "DOOM WiFi AP mode ENABLED")
+        add_compile_definitions(DOOM_WIFI_AP=1)
+    endif()
 endif()

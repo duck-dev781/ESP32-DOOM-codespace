@@ -487,6 +487,17 @@ static volatile bool wifi_connected = false;
 
 static void wifi_handler(void *arg, esp_event_base_t base, int32_t id, void *data) {
     if (base == WIFI_EVENT) {
+#ifdef DOOM_WIFI_AP
+        if (id == WIFI_EVENT_AP_STACONNECTED) {
+            wifi_event_ap_staconnected_t *ev = (wifi_event_ap_staconnected_t *)data;
+            ESP_LOGI(TAG, "AP client connected: MAC=" MACSTR ", aid=%d",
+                     MAC2STR(ev->mac), ev->aid);
+            wifi_connected = true;
+        } else if (id == WIFI_EVENT_AP_STADISCONNECTED) {
+            wifi_connected = false;
+            ESP_LOGW(TAG, "AP client disconnected");
+        }
+#else
         if (id == WIFI_EVENT_STA_START) esp_wifi_connect();
         else if (id == WIFI_EVENT_STA_DISCONNECTED) {
             wifi_connected = false;
@@ -494,11 +505,23 @@ static void wifi_handler(void *arg, esp_event_base_t base, int32_t id, void *dat
             vTaskDelay(pdMS_TO_TICKS(1000));
             esp_wifi_connect();
         }
-    } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
-        ip_event_got_ip_t *e = (ip_event_got_ip_t *)data;
-        wifi_connected = true;
-        ESP_LOGI(TAG, "IP: " IPSTR, IP2STR(&e->ip_info.ip));
-        if (!stream_httpd) start_server();
+#endif
+    } else if (base == IP_EVENT) {
+#ifdef DOOM_WIFI_AP
+        if (id == IP_EVENT_AP_STAIPASSIGNED) {
+            ip_event_ap_staipassigned_t *e = (ip_event_ap_staipassigned_t *)data;
+            wifi_connected = true;
+            ESP_LOGI(TAG, "AP client IP assigned: " IPSTR, IP2STR(&e->ip.addr));
+            if (!stream_httpd) start_server();
+        }
+#else
+        if (id == IP_EVENT_STA_GOT_IP) {
+            ip_event_got_ip_t *e = (ip_event_got_ip_t *)data;
+            wifi_connected = true;
+            ESP_LOGI(TAG, "IP: " IPSTR, IP2STR(&e->ip_info.ip));
+            if (!stream_httpd) start_server();
+        }
+#endif
     }
 }
 
@@ -511,24 +534,69 @@ void doom_stream_wifi_init(const char *ssid, const char *password) {
     }
     esp_netif_init();
     esp_event_loop_create_default();
+
+#ifdef DOOM_WIFI_AP
+    esp_netif_create_default_wifi_ap();
+#else
     esp_netif_create_default_wifi_sta();
+#endif
+
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     esp_wifi_init(&cfg);
     esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &wifi_handler, NULL, NULL);
+#ifdef DOOM_WIFI_AP
+    esp_event_handler_instance_register(IP_EVENT, IP_EVENT_AP_STAIPASSIGNED, &wifi_handler, NULL, NULL);
+#else
     esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &wifi_handler, NULL, NULL);
+#endif
+
+#ifdef DOOM_WIFI_AP
+    esp_wifi_set_mode(WIFI_MODE_AP);
+    wifi_config_t wcfg = {
+        .ap = {
+            .ssid_len = 0,
+            .channel = 1,
+            .password = "",
+            .max_connection = 4,
+            .authmode = WIFI_AUTH_WPA2_PSK,
+        }
+    };
+    strncpy((char *)wcfg.ap.ssid, ssid, sizeof(wcfg.ap.ssid) - 1);
+    if (password && password[0] != '\0') {
+        strncpy((char *)wcfg.ap.password, password, sizeof(wcfg.ap.password) - 1);
+        wcfg.ap.authmode = WIFI_AUTH_WPA2_PSK;
+    } else {
+        wcfg.ap.authmode = WIFI_AUTH_OPEN;
+    }
+    ESP_LOGI(TAG, "Starting AP: %s", ssid);
+    esp_wifi_set_config(WIFI_IF_AP, &wcfg);
+#else
     esp_wifi_set_mode(WIFI_MODE_STA);
     wifi_config_t wcfg = {.sta={.threshold.authmode=WIFI_AUTH_WPA2_PSK}};
     strncpy((char*)wcfg.sta.ssid, ssid, sizeof(wcfg.sta.ssid)-1);
     strncpy((char*)wcfg.sta.password, password, sizeof(wcfg.sta.password)-1);
     ESP_LOGI(TAG, "Connecting to: %s", ssid);
     esp_wifi_set_config(WIFI_IF_STA, &wcfg);
+#endif
     esp_wifi_start();
+
+#ifdef DOOM_WIFI_AP
+    esp_netif_t *ap_netif = esp_netif_next(NULL);
+    if (ap_netif) {
+        esp_netif_ip_info_t ip_info;
+        if (esp_netif_get_ip_info(ap_netif, &ip_info) == ESP_OK) {
+            ESP_LOGI(TAG, "AP IP: " IPSTR, IP2STR(&ip_info.ip));
+            if (!stream_httpd) start_server();
+        }
+    }
+#else
     for (int i = 0; i < 20 && !wifi_connected; i++) vTaskDelay(pdMS_TO_TICKS(500));
     if (wifi_connected) {
         ESP_LOGI(TAG, "WiFi connected!");
     } else {
         ESP_LOGW(TAG, "WiFi connecting...");
     }
+#endif
 }
 
 void doom_stream_start(void) { ESP_LOGI(TAG, "Streaming ready"); }
